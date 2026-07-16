@@ -1,9 +1,4 @@
-/*
- * Direct Newton-Raphson experiment for the BJT circuit.
- *
- * Reuse the solver, transistor model, residual, and Jacobian from the
- * source-stepping program.  Renaming its main() avoids two entry points.
- */
+/* 直接采用nr迭代求解dc */
 #define main source_stepping_program_main
 #include "bjt1_source_stepping.c"
 #undef main
