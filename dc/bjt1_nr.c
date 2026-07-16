@@ -29,7 +29,6 @@ int main(void)
 
     puts("Direct Newton-Raphson test (lambda = 1, initial guess = 0):");
 
-    /* No source stepping: solve the original circuit directly at lambda = 1. */
     if (!newton_solve(&circuit, 1.0, x, &iterations)) {
         fputs("Direct Newton-Raphson did not converge.\n", stderr);
         return 1;

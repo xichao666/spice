@@ -61,8 +61,7 @@ static double safe_exp(double x)
     return exp(x);
 }
 
-/* Calculate Ebers-Moll currents.  IC and IB enter the collector and base;
- * IE leaves the emitter and therefore flows into the common-emitter node. */
+/* 计算BJT电流 */
 static void evaluate_bjts(const Circuit *c, const double x[N],
                           double lambda, BjtValues *b)
 {
