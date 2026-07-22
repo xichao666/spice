@@ -1,0 +1,17 @@
+** Profile: "SCHEMATIC1-bias"  [ C:\Users\Archit\Desktop\PSPICE Simulations\Chua\Using Netlist\chua-schematic1-bias.sim ] 
+
+** Creating circuit file "chua-schematic1-bias.sim.cir" 
+** WARNING: THIS AUTOMATICALLY GENERATED FILE MAY BE OVERWRITTEN BY SUBSEQUENT SIMULATIONS
+
+*Libraries: 
+* Local Libraries :
+* From [PSPICE NETLIST] section of C:\Program Files\OrcadLite\PSpice\PSpice.ini file:
+.lib "nom.lib" 
+
+*Analysis directives: 
+.TEMP 26
+.PROBE V(*) I(*) W(*) D(*) NOISE(*) 
+.INC ".\chua-SCHEMATIC1.net" 
+
+
+.END
