@@ -1,6 +1,6 @@
 # SPICE DC 工作点求解学习项目
 
-这是一个用 C11 编写的电路 DC 工作点求解学习项目。当前支持：
+这是一个用 C 编写的电路 DC 工作点求解学习项目。当前支持：
 
 - 直接 Newton-Raphson；
 - Source Stepping；
