@@ -1,5 +1,5 @@
-#include "../dc_solver.h"
-#include "../source_stepping.h"
+#include "dc_solver.h"
+#include "source_stepping.h"
 
 #include <math.h>
 #include <stdio.h>
