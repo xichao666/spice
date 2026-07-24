@@ -32,17 +32,24 @@ static void build_jacobian(const void *context, const double *x,
 /* 验证通用 Newton 求解器可正确求得已知的两元解。 */
 int main(void)
 {
-    const DcProblem problem = { 2, NULL, build_residual, build_jacobian };
+    const DcProblem problem = {
+        .dimension = 2,
+        .context = NULL,
+        .build_residual = build_residual,
+        .build_jacobian = build_jacobian,
+        .limit_newton_step = NULL
+    };
     const DcSolverOptions options = dc_solver_default_options();
     double x[DC_MAX_UNKNOWNS] = { 0.0 };
-    int iterations = 0;
+    DcNewtonReport report;
 
-    if (!dc_newton_solve(&problem, &options, 1.0, x, &iterations) ||
+    if (!dc_newton_solve_with_report(&problem, &options, 1.0, x, &report) ||
         fabs(x[0] - 2.0) > 1e-12 || fabs(x[1] - 1.0) > 1e-12) {
         fputs("dc_solver test failed.\n", stderr);
         return 1;
     }
 
-    printf("dc_solver test passed in %d Newton iteration(s).\n", iterations);
+    printf("dc_solver test passed in %d Newton iteration(s), %d line-search reduction(s).\n",
+           report.iterations, report.line_search_reductions);
     return 0;
 }

@@ -99,20 +99,32 @@ DcSolverOptions dc_solver_default_options(void)
         .residual_tolerance = 1.0e-11,
         .voltage_tolerance = 1.0e-10,
         .maximum_component_step = 0.20,
-        .initial_lambda_step = 0.05,
+        .maximum_junction_voltage_step = 0.10,
+        .initial_lambda_step = 0.25,
         .minimum_lambda_step = 1.0e-6,
-        .maximum_lambda_step = 0.25
+        .maximum_lambda_step = 0.5,
+        .fast_newton_iteration_threshold = 5,
+        .slow_newton_iteration_threshold = 15,
+        .lambda_step_growth_factor = 1.5,
+        .lambda_step_shrink_factor = 0.5,
+        .source_step_policy = DC_SOURCE_STEP_LEGACY
     };
 }
 
-bool dc_newton_solve(
+/* 固定 lambda 执行 Newton-Raphson，并统计线搜索回退情况。 */
+bool dc_newton_solve_with_report(
     const DcProblem *problem,
     const DcSolverOptions *options,
     double lambda,
     double *x,
-    int *iteration_count)
+    DcNewtonReport *report)
 {
     const int n = problem->dimension; /* 当前电路未知量个数。 */
+
+    if (report == NULL) {
+        return false;
+    }
+    *report = (DcNewtonReport) { 0, 0, NAN };
 
     if (n <= 0 || n > DC_MAX_UNKNOWNS ||
         problem->build_residual == NULL || problem->build_jacobian == NULL) {
@@ -134,10 +146,13 @@ bool dc_newton_solve(
         const double old_norm = infinity_norm(residual, n);
 
         if (!isfinite(old_norm)) {
+            report->iterations = iteration + 1;
+            report->final_residual_norm = old_norm;
             return false;
         }
         if (old_norm < options->residual_tolerance) {
-            *iteration_count = iteration;
+            report->iterations = iteration;
+            report->final_residual_norm = old_norm;
             return true;
         }
 
@@ -148,62 +163,106 @@ bool dc_newton_solve(
         }
 
         if (!solve_dense_system(n, jacobian, rhs, delta)) {
+            report->iterations = iteration + 1;
+            report->final_residual_norm = old_norm;
             return false;
         }
 
-        /* 3. 先限制任何单个未知量的最大变化量。 */
-        double scale = 1.0;
-        for (int i = 0; i < n; ++i) {
-            if (fabs(delta[i]) > options->maximum_component_step) {
-                const double candidate =
-                    options->maximum_component_step / fabs(delta[i]);
-                if (candidate < scale) {
-                    scale = candidate;
-                }
-            }
-        }
-
         /*
-         * 4. 回溯线搜索：若完整 Newton 步不能降低残差，则逐次减半。
-         *    只有新点的残差更小，才接受本次更新。
+         * 3. First try the ordinary damped Newton direction.  If that cannot
+         * reduce the residual, retry once with the circuit-specific junction
+         * limiter.  This keeps normal solves fast while retaining a recovery
+         * path for difficult exponential-device steps.
          */
         bool accepted = false;
-        for (double alpha = scale;
-             alpha >= scale / 1024.0;
-             alpha *= 0.5) {
-            double candidate[DC_MAX_UNKNOWNS];
-            double candidate_residual[DC_MAX_UNKNOWNS];
+        int reductions_this_iteration = 0;
+        const int limiter_attempts =
+            problem->limit_newton_step != NULL &&
+            options->maximum_junction_voltage_step > 0.0 ? 2 : 1;
 
-            for (int i = 0; i < n; ++i) {
-                candidate[i] = x[i] + alpha * delta[i];
+        for (int attempt = 0;
+             attempt < limiter_attempts && !accepted;
+             ++attempt) {
+            if (attempt == 1) {
+                problem->limit_newton_step(
+                    problem->context, x, delta,
+                    options->maximum_junction_voltage_step);
             }
 
-            problem->build_residual(
-                problem->context, candidate, lambda, candidate_residual);
-
-            if (isfinite(infinity_norm(candidate_residual, n)) &&
-                infinity_norm(candidate_residual, n) < old_norm) {
-                for (int i = 0; i < n; ++i) {
-                    actual_step[i] = candidate[i] - x[i];
-                    x[i] = candidate[i];
+            double scale = 1.0;
+            for (int i = 0; i < n; ++i) {
+                if (fabs(delta[i]) > options->maximum_component_step) {
+                    const double candidate =
+                        options->maximum_component_step / fabs(delta[i]);
+                    if (candidate < scale) scale = candidate;
                 }
-                accepted = true;
-                break;
+            }
+
+            for (double alpha = scale;
+                 alpha >= scale / 1024.0;
+                 alpha *= 0.5) {
+                double candidate[DC_MAX_UNKNOWNS];
+                double candidate_residual[DC_MAX_UNKNOWNS];
+
+                for (int i = 0; i < n; ++i) {
+                    candidate[i] = x[i] + alpha * delta[i];
+                }
+
+                problem->build_residual(
+                    problem->context, candidate, lambda, candidate_residual);
+
+                if (isfinite(infinity_norm(candidate_residual, n)) &&
+                    infinity_norm(candidate_residual, n) < old_norm) {
+                    for (int i = 0; i < n; ++i) {
+                        actual_step[i] = candidate[i] - x[i];
+                        x[i] = candidate[i];
+                    }
+                    accepted = true;
+                    break;
+                }
+                ++reductions_this_iteration;
             }
         }
+        report->line_search_reductions += reductions_this_iteration;
 
         if (!accepted) {
+            report->iterations = iteration + 1;
+            report->final_residual_norm = old_norm;
             return false;
         }
 
         /* 5. 变量变化很小时，再检查残差，避免假收敛。 */
         if (infinity_norm(actual_step, n) < options->voltage_tolerance) {
             problem->build_residual(problem->context, x, lambda, residual);
-            if (infinity_norm(residual, n) < options->residual_tolerance) {
-                *iteration_count = iteration + 1;
+            const double final_norm = infinity_norm(residual, n);
+            if (final_norm < options->residual_tolerance) {
+                report->iterations = iteration + 1;
+                report->final_residual_norm = final_norm;
                 return true;
             }
         }
     }
+    double final_residual[DC_MAX_UNKNOWNS];
+    problem->build_residual(problem->context, x, lambda, final_residual);
+    report->iterations = options->maximum_newton_iterations;
+    report->final_residual_norm = infinity_norm(final_residual, n);
     return false;
+}
+
+/* 保留原有简化接口，供已有示例程序继续使用。 */
+bool dc_newton_solve(
+    const DcProblem *problem,
+    const DcSolverOptions *options,
+    double lambda,
+    double *x,
+    int *iteration_count)
+{
+    DcNewtonReport report;
+    const bool converged =
+        dc_newton_solve_with_report(problem, options, lambda, x, &report);
+
+    if (iteration_count != NULL) {
+        *iteration_count = report.iterations;
+    }
+    return converged;
 }
