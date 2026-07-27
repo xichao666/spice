@@ -17,7 +17,12 @@ enum { MAX_ELEMENTS = 128, MAX_MODELS = 16, NAME_SIZE = 32, GROUND = -1 };
 
 /* 电阻、电压源、NPN 模型与 NPN 实例的网表数据。 */
 typedef struct { int p, n; double r; } Resistor;
-typedef struct { int p, n; double v; char name[NAME_SIZE]; } VoltageSource;
+typedef struct {
+    int p, n;
+    double v;
+    double scale;
+    char name[NAME_SIZE];
+} VoltageSource;
 typedef struct {
     char name[NAME_SIZE];
     double is, af, ar;
@@ -198,6 +203,7 @@ static bool parse_netlist(const char *path, NetlistCircuit *circuit)
             VoltageSource *v = &circuit->v[circuit->v_count++];
             v->p = node_index(circuit, atoi(a)); v->n = node_index(circuit, atoi(b));
             v->v = parse_dc_source_value(c, d);
+            v->scale = 1.0;
             snprintf(v->name, sizeof(v->name), "%s", name);
             if (v->p == -2 || v->n == -2 || !isfinite(v->v)) { fclose(file); return false; }
         } else if (type == 'Q' && fields >= 5 && circuit->q_count < MAX_ELEMENTS) {
@@ -223,6 +229,41 @@ static bool parse_netlist(const char *path, NetlistCircuit *circuit)
         if (circuit->q[i].model < 0) return false;
     }
     return circuit->r_count > 0 && circuit->v_count > 0 && circuit->q_count > 0;
+}
+
+/* Reorder voltage sources according to a comma-separated source-name list. */
+static bool reorder_voltage_sources(NetlistCircuit *circuit, const char *text)
+{
+    char buffer[512];
+    VoltageSource ordered[MAX_ELEMENTS];
+    bool used[MAX_ELEMENTS] = { false };
+    int count = 0;
+
+    snprintf(buffer, sizeof(buffer), "%s", text);
+    for (char *item = strtok(buffer, ","); item != NULL;
+         item = strtok(NULL, ",")) {
+        char *end;
+        int found = -1;
+
+        while (isspace((unsigned char)*item)) ++item;
+        end = item + strlen(item);
+        while (end > item && isspace((unsigned char)end[-1])) --end;
+        *end = '\0';
+
+        for (int i = 0; i < circuit->v_count; ++i) {
+            if (!used[i] && _stricmp(item, circuit->v[i].name) == 0) {
+                found = i;
+                break;
+            }
+        }
+        if (found < 0 || count >= circuit->v_count) return false;
+        used[found] = true;
+        ordered[count++] = circuit->v[found];
+    }
+
+    if (count != circuit->v_count) return false;
+    memcpy(circuit->v, ordered, sizeof(VoltageSource) * (size_t)count);
+    return true;
 }
 
 /* 根据温度和模型参数计算本次求解的 BJT 参数。 */
@@ -256,7 +297,8 @@ static void build_system(const void *context, const double *x, double lambda,
         const VoltageSource *v = &circuit->v[i]; const int branch = n + i;
         if (v->p != GROUND) { f[v->p] += x[branch]; j[v->p][branch] += 1.0; j[branch][v->p] += 1.0; }
         if (v->n != GROUND) { f[v->n] -= x[branch]; j[v->n][branch] -= 1.0; j[branch][v->n] -= 1.0; }
-        f[branch] += node_voltage(x, v->p) - node_voltage(x, v->n) - lambda * v->v;
+        f[branch] += node_voltage(x, v->p) - node_voltage(x, v->n) -
+                     lambda * v->scale * v->v;
     }
     for (int i = 0; i < circuit->q_count; ++i) {
         const Bjt *q = &circuit->q[i]; const BjtParameters p = bjt_parameters(circuit, q->model);
@@ -286,6 +328,18 @@ static void residual(const void *c, const double *x, double l, double *f)
 static void jacobian(const void *c, const double *x, double l, double j[DC_MAX_UNKNOWNS][DC_MAX_UNKNOWNS])
 {
   double f[DC_MAX_UNKNOWNS]; build_system(c,x,l,f,j); }
+
+/* 为顺序 Source Stepping 设置网表中一个电压源的缩放比例。 */
+static void set_netlist_source_scale(
+    const void *context,
+    int source_index,
+    double scale)
+{
+    NetlistCircuit *circuit = (NetlistCircuit *)context;
+    if (source_index >= 0 && source_index < circuit->v_count) {
+        circuit->v[source_index].scale = scale;
+    }
+}
 
 /*
  * Limit the change of every BJT base-emitter and base-collector voltage.
@@ -334,11 +388,31 @@ static void print_step(double lambda, const double *x, int iterations, void *con
 {
   (void)x; (void)context; printf("lambda = %.4f, Newton = %d\n", lambda, iterations); }
 
+/* 输出顺序 Source Stepping 中当前电源、局部 lambda 与 Newton 次数。 */
+static void print_sequential_step(
+    int source_index,
+    double lambda,
+    const double *x,
+    int iterations,
+    void *context)
+{
+    const NetlistCircuit *circuit = context;
+    (void)x;
+    if (source_index < 0) {
+        printf("all sources off, Newton = %d\n", iterations);
+    } else {
+        printf("source %s, lambda = %.4f, Newton = %d\n",
+               circuit->v[source_index].name, lambda, iterations);
+    }
+}
+
 /* 读取网表与命令行选项，执行 DC 求解并输出最终工作点。 */
 int main(int argc, char **argv)
 {
     const char *path;
     bool direct_nr = false;
+    bool sequential_sources = false;
+    const char *source_order = NULL;
     NetlistCircuit circuit;
     DcProblem problem;
     DcSolverOptions options = dc_solver_default_options();
@@ -348,7 +422,7 @@ int main(int argc, char **argv)
 
     if (argc < 2) {
         fprintf(stderr,
-                "Usage: %s netlist.txt [--nr] [--secant-predictor] "
+                "Usage: %s netlist.txt [--nr] [--sequential-sources] [--source-order names] [--secant-predictor] "
                 "[--temp Celsius] [--initial-step value] [--max-step value] "
                 "[--fast-threshold count] [--slow-threshold count] "
                 "[--growth-factor value] [--shrink-factor value] "
@@ -361,6 +435,10 @@ int main(int argc, char **argv)
     for (int i = 2; i < argc; ++i) {
         if (strcmp(argv[i], "--nr") == 0) {
             direct_nr = true;
+        } else if (strcmp(argv[i], "--sequential-sources") == 0) {
+            sequential_sources = true;
+        } else if (strcmp(argv[i], "--source-order") == 0 && i + 1 < argc) {
+            source_order = argv[++i];
         } else if (strcmp(argv[i], "--secant-predictor") == 0) {
             options.source_step_policy = DC_SOURCE_STEP_SECANT_PREDICTOR;
         } else if (strcmp(argv[i], "--temp") == 0 && i + 1 < argc) {
@@ -389,15 +467,26 @@ int main(int argc, char **argv)
         fprintf(stderr, "Could not parse supported R/V/Q NPN/PNP netlist: %s\n", path);
         return 1;
     }
+    if (source_order != NULL &&
+        !reorder_voltage_sources(&circuit, source_order)) {
+        fputs("--source-order must list every voltage-source name once.\n", stderr);
+        return 1;
+    }
     if (isfinite(requested_temperature)) {
         circuit.temperature_celsius = requested_temperature;
+    }
+    if (direct_nr && sequential_sources) {
+        fputs("--nr and --sequential-sources cannot be used together.\n", stderr);
+        return 1;
     }
     problem = (DcProblem) {
         .dimension = circuit.node_count + circuit.v_count,
         .context = &circuit,
         .build_residual = residual,
         .build_jacobian = jacobian,
-        .limit_newton_step = limit_bjt_junction_steps
+        .limit_newton_step = limit_bjt_junction_steps,
+        .independent_source_count = circuit.v_count,
+        .set_source_scale = set_netlist_source_scale
     };
     if (direct_nr) {
         if (!dc_newton_solve_with_report(&problem, &options, 1.0, x,
@@ -408,6 +497,15 @@ int main(int argc, char **argv)
         printf("Direct Newton converged in %d iterations, %d line-search reductions.\n",
                newton_report.iterations,
                newton_report.line_search_reductions);
+    } else if (sequential_sources) {
+        int total = 0;
+        if (!dc_sequential_source_stepping_solve(
+                &problem, &options, x, print_sequential_step, &circuit,
+                &total)) {
+            fputs("Sequential source stepping failed.\n", stderr);
+            return 1;
+        }
+        printf("Total Newton iterations: %d\n", total);
     } else {
         int total = 0;
         if (!dc_source_stepping_solve(&problem,&options,x,print_step,NULL,&total)) { fputs("Source stepping failed.\n",stderr); return 1; }

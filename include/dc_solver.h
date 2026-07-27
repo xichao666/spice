@@ -20,12 +20,18 @@ typedef void (*DcJacobianFunction)(
     double lambda,
     double jacobian[DC_MAX_UNKNOWNS][DC_MAX_UNKNOWNS]);
 
-/* Optional circuit-specific limiter for a Newton correction vector. */
+/* 可选的电路专用 Newton 修正量限制函数。 */
 typedef void (*DcStepLimiterFunction)(
     const void *context,
     const double *x,
     double *delta,
     double maximum_junction_voltage_step);
+
+/* 设置一个独立步进电源的缩放比例。 */
+typedef void (*DcSourceScaleFunction)(
+    const void *context,
+    int source_index,
+    double scale);
 
 /*
  * 通用电路问题描述。
@@ -37,6 +43,8 @@ typedef struct {
     DcResidualFunction build_residual;
     DcJacobianFunction build_jacobian;
     DcStepLimiterFunction limit_newton_step;
+    int independent_source_count;
+    DcSourceScaleFunction set_source_scale;
 } DcProblem;
 
 typedef enum {
