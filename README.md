@@ -270,24 +270,7 @@ ctest --test-dir build --output-on-failure
 - 验证直接 Newton、同时步进和顺序步进会因初值或路径不同而得到不同工作点；
 - 验证 Schmitt3 的顺序步进对电源顺序敏感，`VCC1,VCC2,V2,V1` 是一个可行顺序。
 
-## VS Code 配置提示
 
-如果终端可以使用 GCC 正常编译，但 VS Code 中出现 `bool`、`true`、`FILE`、`NAN`、`stderr` 等未定义错误，通常是 C/C++ IntelliSense 没有找到标准库，而不是代码本身无法编译。
-
-在 VS Code 的 `C/C++: Edit Configurations (UI)` 中设置：
-
-```text
-Compiler path:
-D:\86130\spice\.toolchain\w64devkit\w64devkit\bin\gcc.exe
-
-C standard:
-C11
-
-Include path:
-${workspaceFolder}/include
-```
-
-随后执行 `C/C++: Reset IntelliSense Database`。
 
 ## 学习资料
 
