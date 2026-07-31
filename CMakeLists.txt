@@ -14,6 +14,7 @@ set(DC_SOLVER_SOURCES
     src/homotopy.c
     src/gmin_stepping.c
     src/source_stepping.c
+    src/transient_solver.c
 )
 
 add_library(dcsolve STATIC ${DC_SOLVER_SOURCES})
@@ -64,3 +65,7 @@ add_test(NAME fixed_point_homotopy_smoke COMMAND test_homotopy)
 add_executable(reference_homotopy_experiments tests/reference_homotopy_experiments.c)
 target_link_libraries(reference_homotopy_experiments PRIVATE dcsolve)
 add_test(NAME reference_fixed_point_homotopy COMMAND reference_homotopy_experiments)
+
+add_executable(test_transient_gear tests/test_transient_gear.c)
+target_link_libraries(test_transient_gear PRIVATE dcsolve)
+add_test(NAME transient_gear COMMAND test_transient_gear)

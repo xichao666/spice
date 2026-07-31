@@ -27,7 +27,7 @@ typedef void (*DcHomotopySolutionCallback)(
     int solution_index, const double *x, double original_residual_norm,
     void *user_data);
 
-/* 固定点同伦实验的路径与原始 Newton 复核统计。 */
+/* 固定点同伦的路径积分与原始 Newton 复核统计。 */
 typedef struct {
     int accepted_path_steps;
     int crossing_newton_calls;
@@ -36,11 +36,7 @@ typedef struct {
 
 DcHomotopyOptions dc_homotopy_default_options(const double *starting_point);
 
-/*
- * 用参考页面的弧长 ODE predictor-corrector 跟踪固定点同伦零曲线。
- * 返回 true 仅表示路径积分正常结束；solution_count 可为 0，表示这条
- * 已选路径在给定弧长范围内没有与 lambda=1 相交。
- */
+/* 使用伪弧长 predictor-corrector 跟踪固定点同伦路径。 */
 bool dc_fixed_point_homotopy_solve(
     const DcProblem *problem, const DcSolverOptions *newton_options,
     const DcHomotopyOptions *homotopy_options,
@@ -48,7 +44,7 @@ bool dc_fixed_point_homotopy_solve(
     DcHomotopySolutionCallback solution_callback, void *user_data,
     int *solution_count);
 
-/* 与基础接口相同，但额外返回路径点和 lambda=1 复核的统计信息。 */
+/* 与基础接口相同，但额外返回路径点和 lambda=1 复核统计。 */
 bool dc_fixed_point_homotopy_solve_with_report(
     const DcProblem *problem, const DcSolverOptions *newton_options,
     const DcHomotopyOptions *homotopy_options,

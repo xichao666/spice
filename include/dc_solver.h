@@ -3,7 +3,7 @@
 
 #include <stdbool.h>
 
-/* 稠密求解器支持的最大未知量数；更大电路可在后续改为稀疏矩阵。 */
+/* 稠密求解器支持的最大未知量数。 */
 #define DC_MAX_UNKNOWNS 512
 
 /* 电路模型必须提供的残差函数：计算 F(x, lambda)。 */
@@ -33,7 +33,7 @@ typedef void (*DcSourceScaleFunction)(
     int source_index,
     double scale);
 
-/* 设置当前 GMIN 附加电导；具体电路决定哪些节点需要接入该电导。 */
+/* 设置当前 GMIN 附加电导；具体电路决定写入哪些节点方程。 */
 typedef void (*DcGminFunction)(
     const void *context,
     double gmin);
