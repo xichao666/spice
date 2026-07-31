@@ -7,7 +7,7 @@
 typedef void (*DcStepCallback)(
     double lambda,
     const double *x,
-    int newton_iterations,
+    const DcNewtonReport *newton_report,
     void *user_data);
 
 /* 顺序 Source Stepping 中，每个成功步进点调用的回调函数。 */
@@ -15,7 +15,7 @@ typedef void (*DcSequentialStepCallback)(
     int source_index,
     double lambda,
     const double *x,
-    int newton_iterations,
+    const DcNewtonReport *newton_report,
     void *user_data);
 
 /* lambda 从 0 步进到 1；每一步以之前的解作为 Newton 初值。 */

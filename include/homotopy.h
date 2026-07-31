@@ -3,14 +3,9 @@
 
 #include "dc_solver.h"
 
-/*
- * SFU 根页面使用的固定点同伦：
- *
- * H(x, lambda) = (1-lambda) G (x-a) + lambda F(x).
- *
- * 当前学习版令 G 为对角阵；diagonal_scale 为 NULL 时，所有对角元都
- * 取 uniform_scale。lambda=0 时 x=a 是精确已知起点；lambda=1 时
- * H=F，因此路径与 lambda=1 平面的交点是原 DC 工作点。
+/*固定点同伦： H(x, lambda) = (1-lambda) G (x-a) + lambda F(x).
+ * 令 G 为对角阵；diagonal_scale 为 NULL 时，所有对角元都取 uniform_scale。
+ * lambda=0 时 x=a 是精确已知起点；lambda=1 时 H=F，因此路径与 lambda=1 平面的交点是原 DC 工作点。
  */
 typedef struct {
     const double *starting_point;       /* 固定点 a，长度为问题维度。 */
@@ -32,6 +27,13 @@ typedef void (*DcHomotopySolutionCallback)(
     int solution_index, const double *x, double original_residual_norm,
     void *user_data);
 
+/* 固定点同伦实验的路径与原始 Newton 复核统计。 */
+typedef struct {
+    int accepted_path_steps;
+    int crossing_newton_calls;
+    int crossing_newton_iterations;
+} DcHomotopyReport;
+
 DcHomotopyOptions dc_homotopy_default_options(const double *starting_point);
 
 /*
@@ -45,5 +47,13 @@ bool dc_fixed_point_homotopy_solve(
     DcHomotopyPathCallback path_callback,
     DcHomotopySolutionCallback solution_callback, void *user_data,
     int *solution_count);
+
+/* 与基础接口相同，但额外返回路径点和 lambda=1 复核的统计信息。 */
+bool dc_fixed_point_homotopy_solve_with_report(
+    const DcProblem *problem, const DcSolverOptions *newton_options,
+    const DcHomotopyOptions *homotopy_options,
+    DcHomotopyPathCallback path_callback,
+    DcHomotopySolutionCallback solution_callback, void *user_data,
+    int *solution_count, DcHomotopyReport *report);
 
 #endif

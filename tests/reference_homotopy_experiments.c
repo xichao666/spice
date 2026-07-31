@@ -1,5 +1,6 @@
 /* 根页面三个 modified-nodal 基准的独立实验；不依赖 examples/ 的简化方程。 */
 #include "homotopy.h"
+#include "dc_timer.h"
 
 #include <math.h>
 #include <stdio.h>
@@ -105,6 +106,13 @@ typedef struct {
     /* 可选 CSV 输出：路径回调与工作点回调共享同一份实验上下文。 */
     FILE *path_file;
     FILE *solution_file;
+    FILE *summary_file;
+    int accepted_path_steps;
+    double minimum_lambda;
+    double maximum_lambda;
+    double last_arc_step;
+    double last_local_error;
+    double previous_time_ms;
 } Run;
 
 /* 将每个被接受的 predictor-corrector 点写出，供绘图脚本原样使用。 */
@@ -113,9 +121,17 @@ static void record_path(int step, double arc_length, double lambda,
                         void *data)
 {
     Run *run = data;
+    const double now = dc_timer_now_milliseconds();
+    const double elapsed_ms = now - run->previous_time_ms;
+    run->previous_time_ms = now;
+    ++run->accepted_path_steps;
+    if (lambda < run->minimum_lambda) run->minimum_lambda = lambda;
+    if (lambda > run->maximum_lambda) run->maximum_lambda = lambda;
+    run->last_arc_step = arc_step;
+    run->last_local_error = local_error;
     if (run->path_file == NULL) return;
-    fprintf(run->path_file, "%d,%.17g,%.17g,%.17g,%.17g", step, arc_length,
-            lambda, arc_step, local_error);
+    fprintf(run->path_file, "%d,%.17g,%.17g,%.17g,%.17g,%.3f", step,
+            arc_length, lambda, arc_step, local_error, elapsed_ms);
     for (int i = 0; i < run->dimension; ++i) fprintf(run->path_file, ",%.17g", x[i]);
     fputc('\n', run->path_file);
 }
@@ -129,20 +145,23 @@ static void found(int index,const double*x,double norm,void *data)
   }
   for(int i=0;i<r->dimension;++i) printf("  x%-2d = % .10e\n",i+1,x[i]); }
 static int run(const char*name,DcProblem*p,const double*a,int steps,const char *output_directory)
-{ DcSolverOptions no=dc_solver_default_options(); DcHomotopyOptions ho=dc_homotopy_default_options(a); Run r={name,p->dimension,0,NULL,NULL}; int n=0;
-  char path_name[512], solution_name[512];
+{ DcSolverOptions no=dc_solver_default_options(); DcHomotopyOptions ho=dc_homotopy_default_options(a); Run r={name,p->dimension,0,NULL,NULL,NULL,0,INFINITY,-INFINITY,0.0,0.0,dc_timer_now_milliseconds()}; int n=0; DcHomotopyReport report;
+  char path_name[512], solution_name[512], summary_name[512]; const double start_time_ms=dc_timer_now_milliseconds();
   if (output_directory != NULL) {
       snprintf(path_name, sizeof(path_name), "%s/%s_path.csv", output_directory, name);
       snprintf(solution_name, sizeof(solution_name), "%s/%s_solutions.csv", output_directory, name);
-      r.path_file = fopen(path_name, "w"); r.solution_file = fopen(solution_name, "w");
-      if (r.path_file == NULL || r.solution_file == NULL) {
+      snprintf(summary_name, sizeof(summary_name), "%s/%s_summary.csv", output_directory, name);
+      r.path_file = fopen(path_name, "w"); r.solution_file = fopen(solution_name, "w"); r.summary_file = fopen(summary_name, "w");
+      if (r.path_file == NULL || r.solution_file == NULL || r.summary_file == NULL) {
           fprintf(stderr, "Cannot create Homotopy CSV output for %s.\n", name);
           if (r.path_file != NULL) fclose(r.path_file);
           if (r.solution_file != NULL) fclose(r.solution_file);
+          if (r.summary_file != NULL) fclose(r.summary_file);
           return -1;
       }
-      fprintf(r.path_file, "step,arc_length,lambda,arc_step,local_error");
+      fprintf(r.path_file, "step,arc_length,lambda,arc_step,local_error,elapsed_since_previous_ms");
       fprintf(r.solution_file, "solution,residual_norm");
+      fprintf(r.summary_file, "algorithm,circuit,converged,accepted_path_steps,solution_count,crossing_newton_calls,crossing_newton_iterations,total_runtime_ms,minimum_lambda,maximum_lambda,last_arc_step,last_local_error,initial_arc_step,maximum_arc_step\n");
       for (int i = 0; i < p->dimension; ++i) {
           fprintf(r.path_file, ",x%d", i + 1);
           fprintf(r.solution_file, ",x%d", i + 1);
@@ -150,9 +169,11 @@ static int run(const char*name,DcProblem*p,const double*a,int steps,const char *
       fputc('\n', r.path_file); fputc('\n', r.solution_file);
   }
   no.maximum_newton_iterations=120; ho.initial_arc_step=.01; ho.maximum_arc_step=.1; ho.maximum_path_steps=steps; ho.local_error_tolerance=1e-4;
-  const bool ok=dc_fixed_point_homotopy_solve(p,&no,&ho,record_path,found,&r,&n);
+  const bool ok=dc_fixed_point_homotopy_solve_with_report(p,&no,&ho,record_path,found,&r,&n,&report);
+  if (r.summary_file != NULL) fprintf(r.summary_file, "fixed_point_pseudo_arclength,%s,%d,%d,%d,%d,%d,%.3f,%.17g,%.17g,%.17g,%.17g,%.17g,%.17g\n", name, ok?1:0, r.accepted_path_steps, n, report.crossing_newton_calls, report.crossing_newton_iterations, dc_timer_now_milliseconds()-start_time_ms, r.minimum_lambda, r.maximum_lambda, r.last_arc_step, r.last_local_error, ho.initial_arc_step, ho.maximum_arc_step);
   if (r.path_file != NULL) fclose(r.path_file);
   if (r.solution_file != NULL) fclose(r.solution_file);
+  if (r.summary_file != NULL) fclose(r.summary_file);
   printf("%s: path=%s, solutions=%d\n",name,ok?"complete":"failed",n); return ok?n:-1; }
 int main(int argc, char **argv)
 { const double a1[]={.5,.4799,.9047,.6099,.6177,.8594,.8055,.5767}; const double a2[]={.5828,.5862,.9258,.5751,.01,.8094,.6088}; const double a3[]={.0759,.054,.5308,.7792,.934,.1299,.5688,.4694,.0119,.3371,.1622,.7943,.3112,.5285,.1656,.602,.263,.6541};

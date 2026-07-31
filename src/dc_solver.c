@@ -2,6 +2,7 @@
 
 #include <float.h>
 #include <math.h>
+#include <stdlib.h>
 #include <string.h>
 
 /* 返回向量的无穷范数 max(|v_i|)，同时检查 NaN/无穷大。 */
@@ -30,11 +31,17 @@ static bool solve_dense_system(
     const double *input_b,
     double *solution)
 {
-    double a[DC_MAX_UNKNOWNS][DC_MAX_UNKNOWNS];
-    double b[DC_MAX_UNKNOWNS];
+    double (*a)[DC_MAX_UNKNOWNS] = malloc(sizeof(*a) * DC_MAX_UNKNOWNS);
+    double *b = malloc(sizeof(*b) * DC_MAX_UNKNOWNS);
 
-    memcpy(a, input_a, sizeof(a));
-    memcpy(b, input_b, sizeof(b));
+    if (a == NULL || b == NULL) {
+        free(a);
+        free(b);
+        return false;
+    }
+
+    memcpy(a, input_a, sizeof(*a) * DC_MAX_UNKNOWNS);
+    memcpy(b, input_b, sizeof(*b) * DC_MAX_UNKNOWNS);
 
     /* 前向消元：依次把主元下方元素消为 0，得到上三角矩阵。 */
     for (int column = 0; column < dimension; ++column) {
@@ -49,6 +56,8 @@ static bool solve_dense_system(
 
         if (!isfinite(a[pivot][column]) ||
             fabs(a[pivot][column]) < DBL_EPSILON) {
+            free(a);
+            free(b);
             return false;
         }
 
@@ -85,9 +94,13 @@ static bool solve_dense_system(
         solution[row] = sum / a[row][row];
 
         if (!isfinite(solution[row])) {
+            free(a);
+            free(b);
             return false;
         }
     }
+    free(a);
+    free(b);
     return true;
 }
 
@@ -107,6 +120,9 @@ DcSolverOptions dc_solver_default_options(void)
         .slow_newton_iteration_threshold = 15,
         .lambda_step_growth_factor = 1.5,
         .lambda_step_shrink_factor = 0.5,
+        .initial_gmin = 1.0e-3,
+        .minimum_gmin = 1.0e-12,
+        .gmin_reduction_factor = 0.1,
         .source_step_policy = DC_SOURCE_STEP_LEGACY
     };
 }
@@ -136,7 +152,8 @@ bool dc_newton_solve_with_report(
          iteration < options->maximum_newton_iterations;
          ++iteration) {
         double residual[DC_MAX_UNKNOWNS];
-        double jacobian[DC_MAX_UNKNOWNS][DC_MAX_UNKNOWNS];
+        /* 大尺寸稠密 Jacobian 放在静态存储区，避免 Windows 默认线程栈溢出。 */
+        static double jacobian[DC_MAX_UNKNOWNS][DC_MAX_UNKNOWNS];
         double rhs[DC_MAX_UNKNOWNS];
         double delta[DC_MAX_UNKNOWNS] = {0.0};
         double actual_step[DC_MAX_UNKNOWNS] = {0.0};

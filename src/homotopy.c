@@ -92,7 +92,9 @@ static void evaluate_homotopy(
 {
     const int n = problem->dimension;
     double f[DC_MAX_UNKNOWNS];
-    double jf[DC_MAX_UNKNOWNS][DC_MAX_UNKNOWNS];
+    /* DC_MAX_UNKNOWNS 取 512 后，Jacobian 约为 2 MiB。
+       放到静态存储区，避免在 Windows 默认线程栈上溢出。 */
+    static double jf[DC_MAX_UNKNOWNS][DC_MAX_UNKNOWNS];
 
     problem->build_residual(problem->context, x, 1.0, f);
     problem->build_jacobian(problem->context, x, 1.0, jf);
@@ -121,10 +123,12 @@ static bool evaluate_tangent(const DcProblem *problem,
     const int m = n + 1;
     double h[DC_MAX_UNKNOWNS];
     double h_lambda[DC_MAX_UNKNOWNS];
-    double h_x[DC_MAX_UNKNOWNS][DC_MAX_UNKNOWNS];
-    double matrix[HOMOTOPY_MAX_STATE][HOMOTOPY_MAX_STATE] = {{0.0}};
+    /* 这两个稠密矩阵在最大维度下各约为 2 MiB。 */
+    static double h_x[DC_MAX_UNKNOWNS][DC_MAX_UNKNOWNS];
+    static double matrix[HOMOTOPY_MAX_STATE][HOMOTOPY_MAX_STATE];
     double rhs[HOMOTOPY_MAX_STATE] = {0.0};
 
+    memset(matrix, 0, sizeof(matrix));
     evaluate_homotopy(problem, options, state + 1, state[0], h, h_lambda, h_x);
     for (int row = 0; row < n; ++row) {
         matrix[row][0] = h_lambda[row];
@@ -158,7 +162,8 @@ static void record_crossing(
     const DcProblem *problem, const DcSolverOptions *newton_options,
     const double *left, const double *right, double solutions[DC_MAX_UNKNOWNS]
                                                     [DC_MAX_UNKNOWNS],
-    int *count, DcHomotopySolutionCallback callback, void *user_data)
+    int *count, DcHomotopySolutionCallback callback, void *user_data,
+    DcHomotopyReport *homotopy_report)
 {
     const int n = problem->dimension;
     const double denominator = right[0] - left[0];
@@ -171,8 +176,13 @@ static void record_crossing(
     for (int i = 0; i < n; ++i) {
         guess[i] = left[i + 1] + ratio * (right[i + 1] - left[i + 1]);
     }
+    ++homotopy_report->crossing_newton_calls;
     if (!dc_newton_solve_with_report(problem, newton_options, 1.0, guess,
-                                     &report)) return;
+                                     &report)) {
+        homotopy_report->crossing_newton_iterations += report.iterations;
+        return;
+    }
+    homotopy_report->crossing_newton_iterations += report.iterations;
     problem->build_residual(problem->context, guess, 1.0, residual);
     const double residual_norm = infinity_norm(residual, n);
     if (!isfinite(residual_norm)) return;
@@ -212,14 +222,31 @@ bool dc_fixed_point_homotopy_solve(
     DcHomotopySolutionCallback solution_callback, void *user_data,
     int *solution_count)
 {
+    return dc_fixed_point_homotopy_solve_with_report(
+        problem, newton_options, options, path_callback, solution_callback,
+        user_data, solution_count, NULL);
+}
+
+bool dc_fixed_point_homotopy_solve_with_report(
+    const DcProblem *problem, const DcSolverOptions *newton_options,
+    const DcHomotopyOptions *options, DcHomotopyPathCallback path_callback,
+    DcHomotopySolutionCallback solution_callback, void *user_data,
+    int *solution_count, DcHomotopyReport *report)
+{
     const int n = problem == NULL ? 0 : problem->dimension;
     const int m = n + 1;
     double state[HOMOTOPY_MAX_STATE] = {0.0};
     double tangent[HOMOTOPY_MAX_STATE] = {0.0};
-    double solutions[DC_MAX_UNKNOWNS][DC_MAX_UNKNOWNS] = {{0.0}};
+    /* 保存候选解的表在最大维度下约为 2 MiB，不能放在线程栈上。 */
+    static double solutions[DC_MAX_UNKNOWNS][DC_MAX_UNKNOWNS];
     double arc_step;
     double arc_length = 0.0;
     int count = 0;
+    DcHomotopyReport local_report = {0, 0, 0};
+
+    if (report == NULL) report = &local_report;
+    *report = (DcHomotopyReport) {0, 0, 0};
+    memset(solutions, 0, sizeof(solutions));
 
     if (solution_count != NULL) *solution_count = 0;
     if (n <= 0 || n > DC_MAX_UNKNOWNS || newton_options == NULL ||
@@ -277,11 +304,12 @@ bool dc_fixed_point_homotopy_solve(
         if ((state[0] - 1.0) * (corrected[0] - 1.0) <= 0.0 ||
             fabs(corrected[0] - 1.0) <= options->crossing_tolerance) {
             record_crossing(problem, newton_options, state, corrected, solutions,
-                            &count, solution_callback, user_data);
+                            &count, solution_callback, user_data, report);
         }
 
         arc_length += arc_step;
         memcpy(state, corrected, sizeof(double) * (size_t)m);
+        ++report->accepted_path_steps;
         if (!evaluate_tangent(problem, options, state, tangent, tangent)) return false;
         if (path_callback != NULL) {
             path_callback(step, arc_length, state[0], arc_step, local_error,

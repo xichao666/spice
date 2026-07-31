@@ -4,7 +4,7 @@
 #include <stdbool.h>
 
 /* 稠密求解器支持的最大未知量数；更大电路可在后续改为稀疏矩阵。 */
-#define DC_MAX_UNKNOWNS 32
+#define DC_MAX_UNKNOWNS 512
 
 /* 电路模型必须提供的残差函数：计算 F(x, lambda)。 */
 typedef void (*DcResidualFunction)(
@@ -33,6 +33,11 @@ typedef void (*DcSourceScaleFunction)(
     int source_index,
     double scale);
 
+/* 设置当前 GMIN 附加电导；具体电路决定哪些节点需要接入该电导。 */
+typedef void (*DcGminFunction)(
+    const void *context,
+    double gmin);
+
 /*
  * 通用电路问题描述。
  * context 指向具体电路参数；两个函数指针由具体电路模型实现。
@@ -45,6 +50,7 @@ typedef struct {
     DcStepLimiterFunction limit_newton_step;
     int independent_source_count;
     DcSourceScaleFunction set_source_scale;
+    DcGminFunction set_gmin;
 } DcProblem;
 
 typedef enum {
@@ -66,6 +72,9 @@ typedef struct {
     int slow_newton_iteration_threshold;
     double lambda_step_growth_factor;
     double lambda_step_shrink_factor;
+    double initial_gmin;
+    double minimum_gmin;
+    double gmin_reduction_factor;
     DcSourceStepPolicy source_step_policy;
 } DcSolverOptions;
 

@@ -60,12 +60,15 @@ bool dc_source_stepping_solve(
     memset(x, 0, sizeof(double) * (size_t)n);
     DcNewtonReport report;
     if (!dc_newton_solve_with_report(problem, options, lambda, x, &report)) {
+        if (total_newton_iterations != NULL) {
+            *total_newton_iterations = report.iterations;
+        }
         return false;
     }
     iterations = report.iterations;
     total_iterations += iterations;
     if (step_callback != NULL) {
-        step_callback(lambda, x, iterations, user_data);
+        step_callback(lambda, x, &report, user_data);
     }
 
     /* 外层延拓：每次只增加一段 lambda。 */
@@ -120,7 +123,7 @@ bool dc_source_stepping_solve(
             total_iterations += rejected_predictor_iterations + iterations;
 
             if (step_callback != NULL) {
-                step_callback(lambda, x, iterations, user_data);
+                step_callback(lambda, x, &report, user_data);
             }
 
             /* 原规则式步长控制：收敛快则增大，收敛慢则减小。 */
@@ -139,6 +142,9 @@ bool dc_source_stepping_solve(
             previous_step_iterations = 1000000;
             lambda_step *= options->lambda_step_shrink_factor;
             if (lambda_step < options->minimum_lambda_step) {
+                if (total_newton_iterations != NULL) {
+                    *total_newton_iterations = total_iterations;
+                }
                 return false;
             }
         }
@@ -150,6 +156,7 @@ bool dc_source_stepping_solve(
     return true;
 }
 
+ /* 顺序source stepping */
 bool dc_sequential_source_stepping_solve(
     const DcProblem *problem,
     const DcSolverOptions *options,
@@ -188,11 +195,14 @@ bool dc_sequential_source_stepping_solve(
     }
     memset(x, 0, sizeof(double) * (size_t)n);
     if (!dc_newton_solve_with_report(problem, options, 1.0, x, &report)) {
+        if (total_newton_iterations != NULL) {
+            *total_newton_iterations = report.iterations;
+        }
         return false;
     }
     total_iterations += report.iterations;
     if (step_callback != NULL) {
-        step_callback(-1, 0.0, x, report.iterations, user_data);
+        step_callback(-1, 0.0, x, &report, user_data);
     }
 
     for (int source = 0;
@@ -259,7 +269,7 @@ bool dc_sequential_source_stepping_solve(
                 total_iterations += rejected_predictor_iterations + iterations;
 
                 if (step_callback != NULL) {
-                    step_callback(source, lambda, x, iterations, user_data);
+                    step_callback(source, lambda, x, &report, user_data);
                 }
 
                 if (iterations <= options->fast_newton_iteration_threshold) {
@@ -277,6 +287,9 @@ bool dc_sequential_source_stepping_solve(
                 problem->set_source_scale(problem->context, source, lambda);
                 lambda_step *= options->lambda_step_shrink_factor;
                 if (lambda_step < options->minimum_lambda_step) {
+                    if (total_newton_iterations != NULL) {
+                        *total_newton_iterations = total_iterations;
+                    }
                     return false;
                 }
             }

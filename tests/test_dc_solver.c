@@ -1,4 +1,5 @@
 #include "dc_solver.h"
+#include "gmin_stepping.h"
 #include "source_stepping.h"
 
 #include <math.h>
@@ -68,6 +69,43 @@ static void set_sequential_source_scale(
     sources->scale[source_index] = scale;
 }
 
+typedef struct {
+    double gmin;
+} GminContext;
+
+/* 构造带有节点对地附加电导的一元线性方程。 */
+static void build_gmin_residual(
+    const void *context,
+    const double *x,
+    double lambda,
+    double *residual)
+{
+    const GminContext *gmin_context = context;
+    (void)lambda;
+    residual[0] = (1.0 + gmin_context->gmin) * x[0] - 1.0;
+}
+
+/* 构造对应的 Jacobian；GMIN 只增加节点电压方程的对角项。 */
+static void build_gmin_jacobian(
+    const void *context,
+    const double *x,
+    double lambda,
+    double jacobian[DC_MAX_UNKNOWNS][DC_MAX_UNKNOWNS])
+{
+    const GminContext *gmin_context = context;
+    (void)x;
+    (void)lambda;
+    memset(jacobian, 0, sizeof(double) * DC_MAX_UNKNOWNS * DC_MAX_UNKNOWNS);
+    jacobian[0][0] = 1.0 + gmin_context->gmin;
+}
+
+/* 供通用 GMIN Stepping 外层算法更新当前附加电导。 */
+static void set_gmin(const void *context, double gmin)
+{
+    GminContext *gmin_context = (GminContext *)context;
+    gmin_context->gmin = gmin;
+}
+
 /* 验证通用 Newton 求解器可正确求得已知的两元解。 */
 int main(void)
 {
@@ -106,6 +144,24 @@ int main(void)
         fabs(sequential_context.scale[0] - 1.0) > 1e-12 ||
         fabs(sequential_context.scale[1] - 1.0) > 1e-12) {
         fputs("sequential source stepping test failed.\n", stderr);
+        return 1;
+    }
+
+    GminContext gmin_context = { 0.0 };
+    const DcProblem gmin_problem = {
+        .dimension = 1,
+        .context = &gmin_context,
+        .build_residual = build_gmin_residual,
+        .build_jacobian = build_gmin_jacobian,
+        .limit_newton_step = NULL,
+        .set_gmin = set_gmin
+    };
+    int gmin_total = 0;
+    if (!dc_gmin_stepping_solve(&gmin_problem, &options, x,
+                                NULL, NULL, &gmin_total) ||
+        fabs(x[0] - 1.0) > 1e-12 ||
+        fabs(gmin_context.gmin) > 1e-18) {
+        fputs("GMIN stepping test failed.\n", stderr);
         return 1;
     }
 

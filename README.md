@@ -6,7 +6,15 @@
 
 ## 当前阶段说明
 
-本仓库尚未建立正式 Git tag。下面的阶段名称用于说明代码能力的演进，不代表发布版本。
+已发布的版本标签为 `v1`、`v2` 和当前准备发布的 `v3`。下面的阶段名称用于说明代码能力的演进。
+
+### v3：网表与收敛算法升级
+
+- 同时 Source Stepping、顺序 Source Stepping 和 GMIN Stepping；
+- 每次实验输出总 Newton 次数、每步迭代次数、线搜索回退、残差与运行时间；
+- 支持 NPN / PNP BJT、独立电压源 `V`、独立电流源 `I`、DC 电容开路；
+- 支持 `.subckt` / `X` 的层次展开，内部节点使用实例路径隔离；
+- 支持数字节点、文字节点、BJT 实例参数和常见单位后缀；
 
 ### 基础教学阶段
 
@@ -41,9 +49,12 @@
 | `.model NPN/PNP` | 支持当前子集：`IS`、`BF`、`BR`。 |
 | BJT 实例参数 | 支持 `area`。 |
 | `.model` 参数续行 | 支持以 `+` 开头的模型参数续行。 |
-| 电流源、受控源、MOSFET、二极管 | 当前网表 DC 求解器未实现。 |
+| 独立电流源 `I` | 支持；与电压源一起参与 Source Stepping。 |
+| 理想电容 `C` | 支持 DC 开路处理；不参与 DC MNA 方程。 |
+| `.subckt` / `X` | 支持当前文件内的层次展开；内部节点按实例路径命名。 |
+| 受控源、MOSFET、二极管、电感 | 当前网表 DC 求解器未实现。 |
 | `.TRAN`、`.AC`、`.DC` | 未实现；当前项目只进行 DC 工作点分析。 |
-| `.subckt`、参数化网表 | 未实现。 |
+| `.include` / `.lib`、参数化网表 | 未实现。 |
 
 不要把“能够解析一部分 SPICE 风格网表”理解为“兼容完整 SPICE 网表语法或全部器件模型”。
 
@@ -85,6 +96,7 @@ x(k+1) = x(k) + delta_x
 | 直接 Newton-Raphson | `--nr` | 初值较好或用于比较 | 速度可能较快，但对初值敏感。 |
 | 同时 Source Stepping | 默认 | 常规 DC 工作点求解 | 所有独立源共用一个 `lambda` 同时缩放。 |
 | 顺序 Source Stepping | `--sequential-sources` | 同时步进失败、研究上电路径或多解 | 各独立源按指定顺序逐个开启，通常更稳健但不一定更快。 |
+| GMIN Stepping | `--gmin-stepping` | 减弱浮空节点、病态矩阵或强非线性引起的收敛困难 | 为每个非地节点并联临时对地电导，再逐步撤除。 |
 
 ### 同时 Source Stepping
 
@@ -124,10 +136,12 @@ spice/
 ├── include/                 # 公开接口
 │   ├── dc_solver.h          # DcProblem、Newton 选项和求解接口
 │   ├── source_stepping.h    # 同时与顺序 Source Stepping 接口
+│   ├── gmin_stepping.h      # GMIN Stepping 接口
 │   └── homotopy.h           # 固定点同伦接口
 ├── src/                     # 求解器、Parser 与方程实现
 │   ├── dc_solver.c
 │   ├── source_stepping.c
+│   ├── gmin_stepping.c
 │   ├── netlist_dc_solver.c
 │   └── homotopy.c
 ├── examples/                # BJT1、BJT2、BJT3 的手写方程示例
@@ -164,6 +178,9 @@ cmake --build build
 ctest --test-dir build --output-on-failure
 ```
 
+旧的 `examples/` 手写 BJT 程序仍保留作学习资料，但尚未全部迁移到当前
+`DcProblem` 回调接口，因此默认不参与构建。当前推荐从通用网表入口运行实验。
+
 主要生成程序包括：
 
 ```text
@@ -195,6 +212,60 @@ gcc -std=c11 -O2 -Wall -Wextra -Wpedantic -Iinclude `
 ```
 
 不带 `--nr` 和 `--sequential-sources` 时，程序默认使用同时 Source Stepping。
+
+### 直接 Newton-Raphson
+
+```powershell
+.\build\netlist_dc_solver.exe .\netlist\Schmitt1_netlist\Netlist.txt --nr --temp 26
+```
+
+### GMIN Stepping
+
+```powershell
+.\build\netlist_dc_solver.exe .\netlist\Schmitt1_netlist\Netlist.txt --temp 26 `
+    --gmin-stepping
+```
+
+该模式保持原始独立源全开，从较大的 `gmin` 开始，向每个非地节点写入一条临时的对地电导。每个成功工作点作为下一档更小 `gmin` 的 Newton 初值，最后令 `gmin=0` 并再次求解，因此输出的是原始电路而不是被修改电路的工作点。
+
+### 输出可比较的实验数据
+
+为单次运行加上 `--report-dir`，程序会在已存在的目录写入：
+
+- `dc_steps.csv`：每个成功步进点的参数、Newton 次数、线搜索回退次数、残差、该点耗时与全部未知量；
+- `dc_summary.csv`：总 Newton 次数、成功点所用 Newton 次数、失败探测所用 Newton 次数、总耗时、最终残差和本次参数。
+
+```powershell
+New-Item -ItemType Directory -Force .\result\schmitt1-gmin
+.\build\netlist_dc_solver.exe .\netlist\Schmitt1_netlist\Netlist.txt `
+    --temp 26 --gmin-stepping --report-dir .\result\schmitt1-gmin
+```
+
+若要对 `netlist/` 下的全部 `Netlist.txt` 批量比较直接 Newton、同时/顺序 Source Stepping 和 GMIN Stepping，可执行：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\tools\run_dc_experiments.ps1
+```
+
+它会生成 `result/dc_experiments/dc_algorithm_comparison.csv`。顺序 Source Stepping 的默认源顺序若在某个多稳态电路上失败，汇总表会保留对应的失败状态；可再单独指定 `--source-order` 做路径实验。
+
+可使用标准库 Python 将该批量 CSV 生成两张 SVG 图：
+
+```powershell
+python .\tools\plot_dc_experiments.py .\result\dc_experiments
+```
+
+- `dc_algorithm_comparison.svg`：各电路、各算法的总 Newton 次数与运行时间；红色柱表示该路径未收敛。
+- `dc_step_iterations.svg`：每个电路中，各延拓算法在每个成功步的 Newton 次数变化。
+
+固定点同伦/伪弧长实验也可输出同类型的路径与汇总数据：
+
+```powershell
+New-Item -ItemType Directory -Force .\result\homotopy
+.\build\reference_homotopy_experiments.exe .\result\homotopy
+```
+
+其中每个电路会生成 `*_path.csv`、`*_solutions.csv` 和 `*_summary.csv`。路径表包含弧长、`lambda`、弧长步长、局部误差和逐步耗时；汇总表包含接受路径点数、解数量、总耗时和 `lambda` 覆盖范围。
 
 ### 直接 Newton-Raphson
 
@@ -244,6 +315,10 @@ gcc -std=c11 -O2 -Wall -Wextra -Wpedantic -Iinclude `
 | `--secant-predictor` | 启用受残差保护的割线预测初值。 |
 | `--sequential-sources` | 启用顺序 Source Stepping。 |
 | `--source-order names` | 指定顺序模式的独立电压源开启顺序。 |
+| `--gmin-stepping` | 启用 GMIN Stepping。 |
+| `--gmin-initial siemens` | 初始附加对地电导，默认 `1e-3 S`。 |
+| `--gmin-min siemens` | 最后一档非零附加电导，默认 `1e-12 S`。 |
+| `--gmin-factor value` | 每次成功后 `gmin` 的缩小倍率，默认 `0.1`。 |
 
 默认策略使用初始步长 `0.25`、最大步长 `0.50`。若某步 Newton 迭代次数不超过 `5`，下一步将扩大；若达到 `15` 次或本步失败，下一步将缩小。失败点不会被接受，程序会从上一个成功工作点重新尝试。
 
