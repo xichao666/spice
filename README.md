@@ -347,13 +347,6 @@ ctest --test-dir build --output-on-failure
 
 
 
-## 学习资料
-
-- [阶段总结](summary/dc_summary.md)
-- [学习笔记目录](learning/note/README.md)
-- [网表 Parser 代码讲解](learning/网表Parser代码讲解.md)
-- [电路三 Chua 代码逐行解析](learning/电路三-Chua代码逐行解析.md)
-
 ## 已知限制与后续方向
 
 | 当前限制 | 后续方向 |
@@ -365,4 +358,4 @@ ctest --test-dir build --output-on-failure
 | Source Stepping 难以越过折返 | 继续完善伪弧长 predictor-corrector。 |
 | 多解依赖当前路径发现 | 研究多路径追踪与 branch switching。 |
 
-更详细的阶段性进展见 [summary/dc_summary.md](summary/dc_summary.md)。
+
